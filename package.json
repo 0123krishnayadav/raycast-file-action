@@ -1,0 +1,65 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "file-actions",
+  "title": "File Actions",
+  "description": "Alfred-style file & folder actions for the Finder selection: move, copy, trash, open, open with, open in terminal.",
+  "icon": "icon.png",
+  "author": "krishnayadav",
+  "license": "MIT",
+  "platforms": ["macOS"],
+  "categories": ["Productivity", "System"],
+  "commands": [
+    {
+      "name": "file-actions",
+      "title": "File Actions",
+      "subtitle": "Finder Selection",
+      "description": "Show actions for the files/folders selected in Finder. Assign a hotkey (e.g. ⌘O) in Raycast Settings → Extensions.",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "terminalApp",
+      "title": "Terminal App",
+      "description": "App used by \"Open in Terminal\" for folders (iTerm2, Terminal, Warp, Ghostty…). Falls back to Terminal if not installed.",
+      "type": "appPicker",
+      "default": "com.googlecode.iterm2",
+      "required": false
+    },
+    {
+      "name": "confirmTrash",
+      "title": "Trash",
+      "label": "Ask for confirmation before moving to Bin",
+      "description": "Show a confirmation dialog before moving items to the Bin",
+      "type": "checkbox",
+      "default": true,
+      "required": false
+    },
+    {
+      "name": "extraFolders",
+      "title": "Pinned Folders",
+      "description": "Comma-separated folders always shown as destinations (supports ~)",
+      "type": "textfield",
+      "default": "~/Desktop, ~/Documents, ~/Downloads",
+      "required": false
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^2.8.0",
+    "@raycast/utils": "^2.3.2"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.0.4",
+    "@types/node": "22.13.10",
+    "@types/react": "19.0.10",
+    "eslint": "^9.22.0",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.2"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "fix-lint": "ray lint --fix",
+    "lint": "ray lint"
+  }
+}
