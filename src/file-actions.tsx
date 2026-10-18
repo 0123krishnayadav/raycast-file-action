@@ -18,6 +18,7 @@ import {
   Toast,
   trash,
 } from "@raycast/api";
+import { runAppleScript } from "@raycast/utils";
 import { ReactElement, useEffect, useState } from "react";
 
 type Entry = ReactElement<{ title: string; keywords?: string[] }>;
@@ -29,8 +30,15 @@ import { describeItems, prettyPath, recordVisit } from "./utils";
 
 type Item = { path: string; isDir: boolean };
 
+/** Folder of the front Finder window (or Desktop if none is open). */
+async function finderCurrentFolder(): Promise<string> {
+  return runAppleScript('tell application "Finder" to return POSIX path of (insertion location as alias)');
+}
+
 async function loadSelection(): Promise<Item[]> {
-  const selected = await getSelectedFinderItems();
+  let selected = await getSelectedFinderItems().catch(() => []);
+  // Nothing selected → act on the folder currently open in Finder.
+  if (selected.length === 0) selected = [{ path: await finderCurrentFolder() }];
   return Promise.all(
     selected.map(async ({ path: p }) => {
       const clean = p.length > 1 ? p.replace(/\/$/, "") : p;
