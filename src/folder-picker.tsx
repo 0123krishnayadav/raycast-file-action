@@ -255,7 +255,7 @@ async function transfer(op: Operation, sources: string[], destDir: string) {
   }
 }
 
-/** Picker for where to move/copy `sources`: ↵ browses into a folder, ⌘↵ moves/copies there. */
+/** Picker for where to move/copy `sources`: ↵ moves/copies straight into a folder, ⌘→ browses into it. */
 export function DestinationPicker({ op, sources }: { op: Operation; sources: string[] }) {
   const verb = VERB[op];
   return (
@@ -264,7 +264,7 @@ export function DestinationPicker({ op, sources }: { op: Operation; sources: str
         title: `${verb.label} ${describeItems(sources)} to…`,
         pickLabel: `${verb.label} Here`,
         pickIcon: verb.icon,
-        pickOnEnter: false,
+        pickOnEnter: true,
         run: (folder) => transfer(op, sources, folder),
       }}
     />

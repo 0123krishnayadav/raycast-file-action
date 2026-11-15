@@ -7,7 +7,7 @@ Alfred-style file/folder actions for the current Finder selection.
 | Open | Default app |
 | Open With… | Only apps that can open the selection (default app tagged). Also ⌘K → Open With (⌘⇧O) |
 | Open in Terminal | Folders only. App set in preferences (default iTerm, falls back to Terminal) |
-| Move To… / Copy To… | Pinned + recently visited folders. ↵ goes into a folder, ⌘↵ moves/copies straight into it, "Move/Copy Here" at the top of each folder. Typing filters subfolders and also searches deeper (Spotlight) |
+| Move To… / Copy To… | Pinned + recently visited folders. ↵ moves/copies straight into a folder, ⌘→ goes into it ("Move/Copy Here" at the top). Typing filters subfolders and also searches deeper (Spotlight) |
 | Move to Bin | Optional confirmation |
 
 **Act on another folder:** just type — matching folders show up below the actions. ↵ on a folder gives the same action list for it (or ⌘K to run one directly). Or, on any action press **⌘G** (Apply to Another Folder…), pick a folder, and that action runs on it — e.g. highlight *Open in Terminal*, ⌘G, pick `trade-bot`. In the picker, ⌘↵ shows all actions for the folder instead, ⌘→ browses into it.
