@@ -62,7 +62,11 @@ export async function recordVisit(folders: string[]): Promise<void> {
 
 function isNoise(p: string): boolean {
   const rel = p.startsWith(HOME) ? p.slice(HOME.length) : p;
-  return rel.startsWith("/Library") || rel.split("/").some((seg) => seg.startsWith(".")) || p.includes(".app/");
+  return (
+    rel.startsWith("/Library") ||
+    rel.split("/").some((seg) => seg.startsWith(".") || seg === "node_modules") ||
+    p.includes(".app/")
+  );
 }
 
 /** Folders macOS recently used (opened in Finder, etc.), via Spotlight. */
@@ -90,9 +94,32 @@ async function spotlightRecentFolders(): Promise<HistoryEntry[]> {
   }
 }
 
-export type FolderLists = { pinned: string[]; recent: string[] };
+const ZOXIDE_BINS = [
+  "/opt/homebrew/bin/zoxide",
+  "/usr/local/bin/zoxide",
+  path.join(HOME, ".cargo/bin/zoxide"),
+  path.join(HOME, ".local/bin/zoxide"),
+  path.join(HOME, ".nix-profile/bin/zoxide"),
+  "/run/current-system/sw/bin/zoxide",
+];
 
-export async function getVisitedFolders(): Promise<FolderLists> {
+/** Folders from zoxide, most used first (frecency). Empty if zoxide isn't installed. */
+async function zoxideFolders(): Promise<string[]> {
+  // Raycast doesn't inherit the shell PATH, so look in the usual install locations.
+  for (const bin of ZOXIDE_BINS) {
+    try {
+      const { stdout } = await execFileAsync(bin, ["query", "--list"], { timeout: 3000 });
+      return stdout.split("\n").filter(Boolean);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") return [];
+    }
+  }
+  return [];
+}
+
+export type FolderLists = { pinned: string[]; frequent: string[]; recent: string[] };
+
+export async function getFolderSuggestions(): Promise<FolderLists> {
   const { extraFolders } = getPreferenceValues<Preferences>();
   const pinnedCandidates = (extraFolders ?? "")
     .split(",")
@@ -100,7 +127,7 @@ export async function getVisitedFolders(): Promise<FolderLists> {
     .filter(Boolean)
     .map(expandHome);
 
-  const [history, spotlight] = await Promise.all([readHistory(), spotlightRecentFolders()]);
+  const [history, spotlight, frequent] = await Promise.all([readHistory(), spotlightRecentFolders(), zoxideFolders()]);
   const merged = new Map<string, number>();
   for (const e of [...history, ...spotlight]) {
     merged.set(e.path, Math.max(merged.get(e.path) ?? 0, e.time));
@@ -116,7 +143,8 @@ export async function getVisitedFolders(): Promise<FolderLists> {
     if (await isDirectory(p)) recent.push(p);
     if (recent.length >= 60) break;
   }
-  return { pinned: [HOME, ...pinned.filter((p) => p !== HOME)], recent };
+  // zoxide already drops folders that no longer exist.
+  return { pinned: [HOME, ...pinned.filter((p) => p !== HOME)], frequent, recent };
 }
 
 // ---------- Folder listing / search ----------
@@ -134,9 +162,10 @@ export async function listSubfolders(dir: string): Promise<string[]> {
   return result.sort((a, b) => path.basename(a).localeCompare(path.basename(b), undefined, { sensitivity: "base" }));
 }
 
-/** Recursive folder-name search under `dir` using Spotlight. */
+/** Recursive folder-name search under `dir` using Spotlight (same term rules as `matches`). */
 export async function searchFolders(dir: string, query: string, signal?: AbortSignal): Promise<string[]> {
-  const q = query.replace(/["\\*]/g, "");
+  // Spotlight matches the folder name on the last term; `matches` checks the rest against the path.
+  const q = (query.trim().split(/\s+/).pop() ?? "").replace(/["\\*]/g, "");
   if (!q) return [];
   try {
     const { stdout } = await execFileAsync(
@@ -146,7 +175,7 @@ export async function searchFolders(dir: string, query: string, signal?: AbortSi
     );
     return stdout
       .split("\n")
-      .filter((p) => p && p !== dir && !isNoise(p))
+      .filter((p) => p && p !== dir && !isNoise(p) && matches(p, query))
       .sort((a, b) => a.split("/").length - b.split("/").length)
       .slice(0, 100);
   } catch {
@@ -154,10 +183,19 @@ export async function searchFolders(dir: string, query: string, signal?: AbortSi
   }
 }
 
+/** zoxide-style: the last term must be in the folder name, every term somewhere in the path. */
+/** Display name; the home folder shows as "Home". */
+export function folderTitle(p: string): string {
+  return p === HOME ? "Home" : path.basename(p) || p;
+}
+
 export function matches(p: string, query: string): boolean {
-  const name = path.basename(p).toLowerCase();
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-  return terms.every((t) => name.includes(t));
+  if (terms.length === 0) return true;
+  // Home matches "home", "~" and the user name.
+  const name = (p === HOME ? `home ~ ${path.basename(p)}` : path.basename(p)).toLowerCase();
+  const full = `${prettyPath(p)} ${name}`.toLowerCase();
+  return name.includes(terms[terms.length - 1]) && terms.every((t) => full.includes(t));
 }
 
 // ---------- File operations ----------
