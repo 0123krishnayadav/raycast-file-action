@@ -3,8 +3,8 @@ import { runAppleScript } from "@raycast/utils";
 import { useEffect, useState } from "react";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { ActionList, Item } from "./actions";
-import { recordVisit } from "./utils";
+import { ActionList } from "./actions";
+import { isPackage, Item, recordVisit } from "./utils";
 
 /** Folder of the front Finder window (or Desktop if none is open). */
 async function finderCurrentFolder(): Promise<string> {
@@ -20,7 +20,7 @@ async function loadSelection(): Promise<Item[]> {
       const clean = p.length > 1 ? p.replace(/\/$/, "") : p;
       const stat = await fs.stat(clean).catch(() => undefined);
       // Treat app bundles / packages like files.
-      return { path: clean, isDir: !!stat?.isDirectory() && !/\.(app|bundle|pkg)$/.test(clean) };
+      return { path: clean, isDir: !!stat?.isDirectory() && !isPackage(clean) };
     }),
   );
 }

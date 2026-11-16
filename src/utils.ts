@@ -1,4 +1,5 @@
 import { getPreferenceValues, LocalStorage } from "@raycast/api";
+import { runAppleScript } from "@raycast/utils";
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
@@ -149,17 +150,90 @@ export async function getFolderSuggestions(): Promise<FolderLists> {
 
 // ---------- Folder listing / search ----------
 
-export async function listSubfolders(dir: string): Promise<string[]> {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  const result: string[] = [];
-  for (const e of entries) {
-    if (e.name.startsWith(".")) continue;
-    const full = path.join(dir, e.name);
-    if (e.isDirectory() || (e.isSymbolicLink() && (await isDirectory(full)))) {
-      if (!e.name.endsWith(".app")) result.push(full);
-    }
+/** `changed`: when it last arrived here or changed (only set for folder listings). */
+export type Item = { path: string; isDir: boolean; changed?: Date };
+
+/** App bundles and installer packages are folders on disk but act like files. */
+export function isPackage(p: string): boolean {
+  return /\.(app|bundle|pkg)$/i.test(p);
+}
+
+/** Everything in `dir` (hidden entries included), newest first. */
+export async function listEntries(dir: string): Promise<Item[]> {
+  const names = await fs.readdir(dir);
+  const items = await Promise.all(
+    names.map(async (name) => {
+      const full = path.join(dir, name);
+      // stat follows symlinks; a broken link still lists, as a file.
+      const st = await fs.stat(full).catch(() => fs.lstat(full).catch(() => undefined));
+      // ctime, not mtime: moving or unzipping something here keeps its old mtime but bumps
+      // ctime, so this tracks Finder's "Date Added" (mtime alone misses moved-in items).
+      return { path: full, isDir: !!st?.isDirectory() && !isPackage(name), changed: st?.ctime };
+    }),
+  );
+  return items.sort((a, b) => (b.changed?.getTime() ?? 0) - (a.changed?.getTime() ?? 0));
+}
+
+/**
+ * Search text one level above `target` ("Downloads/first/" → "Downloads/", "Downloads/" → "~/"),
+ * or undefined at "/". Keeps what was typed when it still leads there.
+ */
+export function parentQuery(
+  text: string,
+  target: { dir: string; filter: string },
+  anchor?: PathAnchor,
+): string | undefined {
+  const parent = path.dirname(target.dir);
+  if (parent === target.dir) return undefined;
+  const typed = text.slice(0, text.length - target.filter.length).replace(/[^/]*\/$/, "");
+  return typed && resolvePathQuery(typed, anchor)?.dir === parent ? typed : pathLabel(parent);
+}
+
+/** Search-bar text that lists `dir`: "/", "~/", "~/Downloads/". */
+export function pathLabel(dir: string): string {
+  return dir === "/" ? "/" : `${prettyPath(dir)}/`;
+}
+
+/** Short reason a folder can't be listed, for the empty view. */
+export function readError(e: unknown): string {
+  switch ((e as NodeJS.ErrnoException).code) {
+    case "ENOENT":
+      return "No such folder";
+    case "ENOTDIR":
+      return "Not a folder";
+    case "EACCES":
+    case "EPERM":
+      return "No permission to open this folder";
+    default:
+      return e instanceof Error ? e.message : String(e);
   }
-  return result.sort((a, b) => path.basename(a).localeCompare(path.basename(b), undefined, { sensitivity: "base" }));
+}
+
+/** A name Tab put in the search bar ("Downloads/") and the folder it stands for. */
+export type PathAnchor = { label: string; dir: string };
+
+/**
+ * Search text with a "/" is a path: "Downloads/fir" lists `Downloads` filtered by "fir".
+ * It starts at `anchor.dir` when it begins with `anchor.label`; otherwise "/" is the root,
+ * "~/" is home, and anything else is relative to `cwd`.
+ */
+export function resolvePathQuery(
+  text: string,
+  anchor: PathAnchor | undefined,
+  cwd = HOME,
+): { dir: string; filter: string } | undefined {
+  if (!text.includes("/")) return undefined;
+  let base = cwd;
+  let rel = text;
+  if (anchor && text.startsWith(anchor.label)) {
+    base = anchor.dir;
+    rel = text.slice(anchor.label.length);
+  } else if (text.startsWith("~/")) {
+    base = HOME;
+    rel = text.slice(2);
+  }
+  const slash = rel.lastIndexOf("/");
+  return { dir: path.resolve(base, rel.slice(0, slash + 1)), filter: rel.slice(slash + 1) };
 }
 
 /** Recursive folder-name search under `dir` using Spotlight (same term rules as `matches`). */
@@ -242,6 +316,22 @@ export async function performOperation(op: Operation, sources: string[], destDir
     result.done.push(name);
   }
   return result;
+}
+
+/** Puts the files themselves on the clipboard (⌘V pastes them in Finder, Mail, Slack…). */
+export async function copyFilesToClipboard(paths: string[]): Promise<void> {
+  // Raycast's Clipboard.copy takes one file; NSPasteboard takes any number.
+  const ok = await runAppleScript(
+    `function run(argv) {
+      ObjC.import("AppKit");
+      const pb = $.NSPasteboard.generalPasteboard;
+      pb.clearContents;
+      return pb.writeObjects($(argv.map((p) => $.NSURL.fileURLWithPath(p))));
+    }`,
+    paths,
+    { language: "JavaScript" },
+  );
+  if (ok !== "true") throw new Error("The clipboard did not accept the files");
 }
 
 export function describeItems(paths: string[]): string {

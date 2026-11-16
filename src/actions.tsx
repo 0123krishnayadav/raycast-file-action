@@ -21,11 +21,17 @@ import {
 } from "@raycast/api";
 import { ReactElement, ReactNode, useState } from "react";
 import path from "node:path";
-import { DestinationPicker, FolderPicker, PickerConfig, useFolderSearch } from "./folder-picker";
+import {
+  DestinationPicker,
+  FolderPicker,
+  moreHint,
+  NavigationActions,
+  PickerConfig,
+  useFolderSearch,
+  usePathSearch,
+} from "./folder-picker";
 import { getCompatibleApps, OpenWithList, openWith } from "./open-with";
-import { describeItems, folderTitle, prettyPath, recordVisit } from "./utils";
-
-export type Item = { path: string; isDir: boolean };
+import { copyFilesToClipboard, describeItems, folderTitle, Item, prettyPath, recordVisit } from "./utils";
 
 /** One row of the action list. It runs on any paths, so it can be re-targeted at another folder. */
 type ActionDef = {
@@ -102,6 +108,20 @@ function getActionDefs(): ActionDef[] {
       push: (paths) => <DestinationPicker op="copy" sources={paths} />,
     },
     {
+      id: "clipboard",
+      title: "Copy to Clipboard",
+      icon: Icon.Clipboard,
+      keywords: ["paste", "clipboard"],
+      run: async (paths) => {
+        try {
+          await copyFilesToClipboard(paths);
+          await done(`Copied ${describeItems(paths)} to clipboard`);
+        } catch (e) {
+          await showToast({ style: Toast.Style.Failure, title: "Could not copy to clipboard", message: String(e) });
+        }
+      },
+    },
+    {
       id: "bin",
       title: "Move to Bin",
       icon: { source: Icon.Trash, tintColor: "red" },
@@ -155,7 +175,6 @@ function TargetPicker({ def }: { def: ActionDef }) {
     title: `${def.title.replace(/…$/, "")} — Choose Folder`,
     pickLabel: def.title,
     pickIcon: def.icon,
-    pickOnEnter: true,
     ...("push" in def
       ? { push: (f: string) => def.push([f]) }
       : { run: (f: string) => def.run([f]), pickStyle: def.style }),
@@ -171,10 +190,14 @@ function TargetPicker({ def }: { def: ActionDef }) {
   return <FolderPicker config={config} />;
 }
 
-/** Actions for `items` (undefined while loading). Typing also searches folders to act on instead. */
+/**
+ * Actions for `items` (undefined while loading). Typing also searches folders to act on instead;
+ * ⇥ on a folder lists what is inside it ("Downloads/"), files included.
+ */
 export function ActionList({ items }: { items?: Item[] }) {
-  const [query, setQuery] = useState("");
-  const folderSearch = useFolderSearch(query);
+  const search = usePathSearch();
+  const here = search.target?.dir;
+  const folderSearch = useFolderSearch(search.target?.filter ?? search.text, here);
   const defs = getActionDefs();
 
   const paths = items?.map((i) => i.path) ?? [];
@@ -192,6 +215,20 @@ export function ActionList({ items }: { items?: Item[] }) {
         shortcut={Keyboard.Shortcut.Common.CopyPath}
       />
     </ActionPanel.Section>
+  );
+
+  // While typing: matching folders below the actions; ↵ shows the same action list for that folder.
+  const q = search.text.trim().toLowerCase();
+  const { pinned, frequent, recent, deep, files, more } = folderSearch.sections;
+  const folders = q ? [...pinned, ...frequent, ...recent, ...deep] : [];
+  // Actions can rank above the folders ("Mo" → Move To…, then Movies); ⇥ still goes into the first folder.
+  const tabToFirstFolder = folders[0] && (
+    <Action
+      title={`Go into ${folderTitle(folders[0])}`}
+      icon={Icon.ArrowRight}
+      shortcut={{ modifiers: [], key: "tab" }}
+      onAction={() => search.complete({ path: folders[0], isDir: true })}
+    />
   );
 
   type Entry = { key: string; title: string; keywords: string[]; el: ReactElement };
@@ -220,6 +257,7 @@ export function ActionList({ items }: { items?: Item[] }) {
                 shortcut={{ modifiers: ["cmd"], key: "g" }}
                 target={<TargetPicker def={def} />}
               />
+              {tabToFirstFolder}
               {common}
             </ActionPanel>
           }
@@ -227,7 +265,6 @@ export function ActionList({ items }: { items?: Item[] }) {
       ),
     }));
 
-  const q = query.trim().toLowerCase();
   // Rank by title match first, keywords last; ties keep the fixed order above.
   const score = (e: Entry) => {
     const title = e.title.toLowerCase();
@@ -238,7 +275,9 @@ export function ActionList({ items }: { items?: Item[] }) {
     return -1;
   };
   let visible = entries.map((e) => e.el);
-  if (q) {
+  if (here) {
+    visible = []; // browsing a path: its contents replace the actions
+  } else if (q) {
     visible = entries
       .map((e, idx) => ({ e, idx, s: score(e) }))
       .filter((x) => x.s >= 0)
@@ -246,56 +285,95 @@ export function ActionList({ items }: { items?: Item[] }) {
       .map((x) => x.e.el);
   }
 
-  // While typing: matching folders below the actions; ↵ shows the same action list for that folder.
-  const { pinned, frequent, recent, deep } = folderSearch.sections;
-  const folders = q ? [...pinned, ...frequent, ...recent, ...deep] : [];
+  const row = (item: Item) => {
+    const date = folderSearch.changed.get(item.path);
+    return (
+      <List.Item
+        key={item.path}
+        id={item.path}
+        title={folderTitle(item.path)}
+        subtitle={here && path.dirname(item.path) === here ? undefined : prettyPath(path.dirname(item.path))}
+        icon={{ fileIcon: item.path }}
+        quickLook={{ path: item.path, name: folderTitle(item.path) }}
+        accessories={[
+          ...(date ? [{ date, tooltip: `Added or changed ${date.toLocaleString()}` }] : []),
+          ...(item.isDir ? [{ icon: Icon.ChevronRight }] : []),
+        ]}
+        actions={
+          <ActionPanel>
+            <Action.Push
+              title="Show Actions"
+              icon={Icon.List}
+              target={<ActionList items={[item]} />}
+              onPush={() => recordVisit([item.isDir ? item.path : path.dirname(item.path)])}
+            />
+            {/* Kept second so ⌘↵ still runs Open, as before. */}
+            <ActionPanel.Section>
+              {defs.filter((def) => item.isDir || !def.dirsOnly).map((def) => defAction(def, [item.path]))}
+            </ActionPanel.Section>
+            <NavigationActions search={search} item={item} />
+            <ActionPanel.Section>
+              <Action.ToggleQuickLook shortcut={Keyboard.Shortcut.Common.ToggleQuickLook} />
+              <Action.ShowInFinder path={item.path} shortcut={{ modifiers: ["cmd"], key: "f" }} />
+              <Action.CopyToClipboard
+                title="Copy Path"
+                content={item.path}
+                shortcut={Keyboard.Shortcut.Common.CopyPath}
+              />
+            </ActionPanel.Section>
+          </ActionPanel>
+        }
+      />
+    );
+  };
+
+  // On top, or below the matches while filtering so ⇥ lands on the first match.
+  const thisFolder = here && !folderSearch.error && (
+    <List.Section title="This Folder">{row({ path: here, isDir: true })}</List.Section>
+  );
+  const filtering = !!search.target?.filter.trim();
 
   return (
     <List
+      {...search.listProps}
       isLoading={!items || (!!q && folderSearch.isLoading)}
-      navigationTitle={what}
-      searchBarPlaceholder={`Actions for ${what}, or search folders…`}
-      filtering={false}
-      onSearchTextChange={setQuery}
+      navigationTitle={here ? prettyPath(here) : what}
+      searchBarPlaceholder={`Actions for ${what}, or search folders… ⇥ goes into one`}
     >
-      <List.EmptyView icon={Icon.MagnifyingGlass} title="No matching actions or folders" />
+      {folderSearch.error ? (
+        <List.EmptyView
+          icon={Icon.Warning}
+          title={folderSearch.error}
+          description={here && prettyPath(here)}
+          actions={
+            <ActionPanel>
+              <NavigationActions search={search} />
+            </ActionPanel>
+          }
+        />
+      ) : (
+        <List.EmptyView icon={Icon.MagnifyingGlass} title="No matching actions or folders" />
+      )}
       {items && (
         <List.Section title={what} subtitle={subtitle}>
           {visible}
         </List.Section>
       )}
+      {items && !filtering && thisFolder}
       {items && folders.length > 0 && (
-        <List.Section title="Folders" subtitle="↵ for actions">
-          {folders.map((f) => (
-            <List.Item
-              key={f}
-              title={folderTitle(f)}
-              subtitle={prettyPath(path.dirname(f))}
-              icon={{ fileIcon: f }}
-              accessories={[{ icon: Icon.ChevronRight }]}
-              actions={
-                <ActionPanel>
-                  <Action.Push
-                    title="Show Actions"
-                    icon={Icon.List}
-                    target={showActionsFor(f)}
-                    onPush={() => recordVisit([f])}
-                  />
-                  <ActionPanel.Section>{defs.map((def) => defAction(def, [f]))}</ActionPanel.Section>
-                  <ActionPanel.Section>
-                    <Action.ShowInFinder path={f} shortcut={{ modifiers: ["cmd"], key: "f" }} />
-                    <Action.CopyToClipboard
-                      title="Copy Path"
-                      content={f}
-                      shortcut={Keyboard.Shortcut.Common.CopyPath}
-                    />
-                  </ActionPanel.Section>
-                </ActionPanel>
-              }
-            />
-          ))}
+        <List.Section
+          title="Folders"
+          subtitle={["↵ for actions · ⇥ to go in", moreHint(more.folders)].filter(Boolean).join(" · ")}
+        >
+          {folders.map((f) => row({ path: f, isDir: true }))}
         </List.Section>
       )}
+      {items && files.length > 0 && (
+        <List.Section title="Files" subtitle={["↵ for actions", moreHint(more.files)].filter(Boolean).join(" · ")}>
+          {files.map((f) => row({ path: f, isDir: false }))}
+        </List.Section>
+      )}
+      {items && filtering && thisFolder}
     </List>
   );
 }
